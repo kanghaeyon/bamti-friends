@@ -92,9 +92,6 @@
   #stick{width:118px;height:118px;border-radius:50%;border:3px solid #ffffffcc;background:radial-gradient(circle at 35% 30%,#ffffff88,#d7ecff55 58%,#9ec4ee44);box-shadow:inset 0 -10px 14px #7ea4cc33,0 8px 16px #18345a33;position:relative;pointer-events:auto;touch-action:none}
   #knob{position:absolute;left:50%;top:50%;width:50px;height:50px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#d9ecff);border:3px solid #fff;box-shadow:0 5px 0 #b7cce4;transform:translate(-50%,-50%)}
   #jumpBtn{width:108px;height:108px;border-radius:50%;border:3px solid #fff;background:radial-gradient(circle at 35% 28%,#fff,#ffd0e6 46%,#f090c4cc);color:#fff;font-size:36px;text-shadow:0 2px 4px #a45;box-shadow:0 8px 0 #e07ab088,inset 0 -8px 0 #ffffff55;pointer-events:auto;touch-action:none}
-  #turn{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:#102848cc;color:#fff;font-weight:900;text-align:center;padding:24px}
-  #turn[hidden]{display:none !important}
-  #turn p{background:#fff8fd;color:#65508b;border-radius:24px;padding:22px 18px;width:min(90vw,360px)}
   @media(max-height:520px){
     #stick{width:112px;height:112px}
     #knob{width:50px;height:50px}
@@ -157,6 +154,16 @@
     #topRankList li.rank1{font-size:17px;padding:10px 8px}
     .rankDare{margin:8px 0 6px;font-size:13px;line-height:1.35}
     #topRankOpen{font-size:14px;padding:8px}
+  }
+  @media (pointer: coarse){
+    #topRank{top:8px;right:6px;left:auto;bottom:auto;width:min(168px,46vw);padding:6px;border-width:2px;border-radius:14px;box-shadow:0 3px 0 #ead3f2}
+    #topRank h2{font-size:13px;margin:0 0 3px}
+    #topRankList{gap:2px}
+    #topRankList li{font-size:12px;padding:3px 5px;border-radius:8px;grid-template-columns:40px minmax(0,1fr) auto;gap:3px}
+    #topRankList li.rank1{font-size:13px;padding:4px 5px;box-shadow:0 2px 0 #e2b23a}
+    #topRankList .empty{font-size:12px;padding:6px 4px}
+    .rankDare{margin:3px 0;font-size:11px;line-height:1.25}
+    #topRankOpen{font-size:12px;padding:5px 4px;border-radius:10px;box-shadow:0 2px 0 #5640c4}
   }
   #settings{position:fixed;inset:0;z-index:22;display:flex;align-items:center;justify-content:center;background:#10284888;padding:16px}
   #settings[hidden]{display:none !important}
@@ -255,7 +262,6 @@
         <h2>모바일 조작</h2>
         <p>왼쪽 둥근 조이스틱으로 이동해요. PC에서는 조이스틱이 숨겨져요.</p>
         <p>오른쪽 큰 버튼으로 점프하고, 버튼을 두 번 누르면 더블 점프예요.</p>
-        <p>스마트폰은 가로 화면에서 플레이해 줘.</p>
       </section>
       <section class="infoCard">
         <h2>장애물</h2>
@@ -321,10 +327,6 @@
   <div id="stick"><div id="knob"></div></div>
   <button id="jumpBtn" type="button" aria-label="점프">▲</button>
 </div>
-<div id="turn" hidden>
-  <p>휴대폰은 가로로 돌려 줘.<br><button id="turnStay" class="ghost" type="button">이대로 플레이</button></p>
-</div>
-
 <script type="importmap">
 {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js"}}
 </script>
@@ -1906,11 +1908,6 @@ function beginStage(n){
   snapCamera();
   state = "play";
   document.body.classList.add("playing");
-  try{
-    const orient = screen.orientation;
-    if(orient && orient.lock) orient.lock("landscape").catch(()=>{});
-  }catch(e){}
-  updateTurnHint();
   document.getElementById("hud").hidden = false;
   document.getElementById("menu").style.display = "none";
   document.getElementById("mapHint").hidden = true;
@@ -3168,17 +3165,6 @@ addEventListener("touchstart", ()=> document.body.classList.add("touch"), {passi
 addEventListener("touchmove", e=>{ if(e.cancelable) e.preventDefault(); }, {passive:false});
 addEventListener("gesturestart", e=> e.preventDefault());
 if(matchMedia("(pointer: coarse)").matches) document.body.classList.add("touch","coarse");
-function updateTurnHint(){
-  const phone = document.body.classList.contains("touch") || document.body.classList.contains("coarse");
-  const portrait = innerHeight > innerWidth + 40;
-  const show = phone && portrait && !document.body.dataset.stay && (state==="play" || state==="menu" || state==="nick");
-  document.getElementById("turn").hidden = !show;
-}
-document.getElementById("turnStay").onclick = ()=>{
-  document.body.dataset.stay = "1";
-  document.getElementById("turn").hidden = true;
-};
-addEventListener("resize", updateTurnHint);
 addEventListener("contextmenu", e=> e.preventDefault());
 
 const raycaster = new THREE.Raycaster();
@@ -3199,7 +3185,6 @@ renderer.domElement.addEventListener("pointerdown", e=>{
 addEventListener("resize", ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.fov = innerHeight<520 ? 70 : innerHeight>innerWidth ? 74 : 64;
-  updateTurnHint();
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   layoutMenu();
@@ -3216,7 +3201,6 @@ else{
   document.getElementById("menu").style.display = "none";
   setOverlay("nick", true);
 }
-updateTurnHint();
 camera.position.set(0, 1.7, 8.2);
 camera.lookAt(0, 1.05, 0);
 frame();
