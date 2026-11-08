@@ -748,7 +748,7 @@ const KINDS = [
 const STAGES = [
   {
     title:"잔잔한 첫 물결",
-    ranks:[26,40,58],
+    ranks:[9,15,30],
     fog:0xc5e4f8,
     sea:{deep:0x0b4a96,mid:0x3aa0ee,pur:0x6a78e0,hor:0xffd2b8,sky:0x8ec8f8,top:0x4f7eec},
     platforms:[
@@ -768,7 +768,7 @@ const STAGES = [
   },
   {
     title:"흔들리는 발판",
-    ranks:[36,54,78],
+    ranks:[10,18,34],
     fog:0xb7e6ef,
     sea:{deep:0x0a6a78,mid:0x2aa8c4,pur:0x3e8ea8,hor:0xffe0c0,sky:0x7ed0ea,top:0x3d8ec8},
     platforms:[
@@ -789,7 +789,7 @@ const STAGES = [
   },
   {
     title:"바다 친구들의 길",
-    ranks:[34,52,76],
+    ranks:[11,19,36],
     fog:0xd0c8f2,
     sea:{deep:0x243888,mid:0x5a78d8,pur:0x8a6ad0,hor:0xf0c8ea,sky:0xb0aaee,top:0x6a68c8},
     platforms:[
@@ -810,7 +810,7 @@ const STAGES = [
   },
   {
     title:"스프링과 대왕문어",
-    ranks:[30,46,68],
+    ranks:[8,14,28],
     fog:0xf6d2c0,
     sea:{deep:0x8a3a58,mid:0xe07a62,pur:0xc45a98,hor:0xffc09a,sky:0xf0a888,top:0xd070c0},
     octopus:{x:-0.3,z:-37.7,r:2.35},
@@ -829,7 +829,7 @@ const STAGES = [
   },
   {
     title:"해적선으로",
-    ranks:[42,62,90],
+    ranks:[19,31,50],
     fog:0xf0c4e4,
     sea:{deep:0x5a2878,mid:0xd060b0,pur:0xf09068,hor:0xffc0d8,sky:0xf090c0,top:0xc060a8},
     octopus:{x:0.2,z:-59.1,r:2.3},
@@ -1898,7 +1898,24 @@ function buildStage(n){
     const g = buildGiant(def.octopus.r);
     g.position.set(def.octopus.x, -1.15, z);
     world.add(g);
-    enemies.push({type:"giant", mesh:g, x:def.octopus.x, z, r:def.octopus.r, dmg:1, phase:1});
+    enemies.push({type:"giant", mesh:g, x:def.octopus.x, z, homeX:def.octopus.x, homeZ:z, r:def.octopus.r, dmg:1, phase:1, heave:0, hitR:def.octopus.r});
+  }
+
+  function addEdgeStar(platform, side){
+    if(!platform) return;
+    addEnemy("star", platform);
+    const e = enemies[enemies.length-1];
+    e.ox = side * Math.max(0.8, platform.w*0.5 - 0.9);
+    e.mesh.position.x = e.ox;
+  }
+  if(stageIndex===3){
+    addEdgeStar(platforms.find(p=>!p.enemy && p.star && p.y>3), 1);
+    addEdgeStar(platforms.find(p=>p.move==="x"), -1);
+  }
+  if(stageIndex===4){
+    addEdgeStar(platforms.find(p=>p.enemy==="shark"), -1);
+    addEdgeStar(platforms.find(p=>p.star && !p.enemy && !p.spring && p.y>0.2 && p.y<0.5), 1);
+    addEdgeStar(platforms.find(p=>p.move==="y"), -1);
   }
 }
 
@@ -1924,7 +1941,7 @@ function addEnemy(type, platform){
   const lift = type==="jelly" ? 0.15 : type==="shark" ? -0.85 : 0;
   mesh.position.set(ox, lift, oz);
   platform.mesh.add(mesh);
-  enemies.push({type, mesh, platform, r, dmg, ox, oz, range, phase:Math.random()*6});
+  enemies.push({type, mesh, platform, r, dmg, ox, oz, range, phase:Math.random()*6, mode:type==="shark"?"idle":"home", timer:0, traveled:0, dirX:1, dirZ:0, backX:ox, backZ:oz, jumpCd:0});
 }
 
 function buildDressing(){
@@ -2193,7 +2210,7 @@ function timePoints(index, sec){
 }
 function starPoints(n){
   const count = Math.max(0, Math.min(3, n|0));
-  return count * 100 + (count === 3 ? 300 : 0);
+  return count * 100;
 }
 function stagePoints(index, sec, stars){
   return timePoints(index, sec) + starPoints(stars);
@@ -2275,7 +2292,6 @@ let rankBoardOpen = false;
 function rankHeaders(){
   return {
     apikey: RANK_PUBLISHABLE,
-    Authorization: "Bearer " + RANK_PUBLISHABLE,
     "Content-Type": "application/json"
   };
 }
@@ -2480,6 +2496,46 @@ async function insertLeaderboardRow(
     stage: Number(stageNumber),
     clear_time: Number(rec.time) || 0
   };
+  const filter =
+    "nickname=eq." + encodeURIComponent(body.nickname) +
+    "&stage=eq." + encodeURIComponent(body.stage);
+  const lookup = await fetch(
+    RANK_API + "/rest/v1/leaderboard" +
+    "?select=score,clear_time&" + filter +
+    "&order=score.desc,clear_time.asc&limit=1",
+    { headers: rankHeaders() }
+  );
+  if(!lookup.ok){
+    throw new Error("leaderboard_write_failed");
+  }
+  const found = await lookup.json();
+  const best = found && found[0];
+  if(best){
+    const bestScore = Number(best.score) || 0;
+    const bestTime = Number(best.clear_time) || 0;
+    const better =
+      body.score > bestScore ||
+      (body.score === bestScore && body.clear_time < bestTime);
+    if(!better) return true;
+    const patch = await fetch(
+      RANK_API + "/rest/v1/leaderboard?" + filter,
+      {
+        method: "PATCH",
+        headers: {
+          ...rankHeaders(),
+          Prefer: "return=minimal"
+        },
+        body: JSON.stringify({
+          score: body.score,
+          clear_time: body.clear_time
+        })
+      }
+    );
+    if(!patch.ok){
+      throw new Error("leaderboard_write_failed");
+    }
+    return true;
+  }
 
   const res = await fetch(
     RANK_API + "/rest/v1/leaderboard",
@@ -3271,10 +3327,73 @@ function updatePlatforms(dt){
   }
 }
 
-function updateEnemies(){
+function octoHigherPad(e){
+  let best = null;
+  let bestD = 12.5;
+  const baseY = e.platform.top||e.platform.y;
+  for(const p of platforms){
+    if(p===e.platform || !p.mesh) continue;
+    const dy = (p.top||p.y) - baseY;
+    if(dy<0.35 || dy>1.8) continue;
+    const d = Math.hypot(p.x-e.platform.x, p.z-e.platform.z);
+    if(d>0.2 && d<bestD){
+      best = p;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+function updateEnemies(dt){
+  const stage5 = stageIndex===4;
   for(const e of enemies){
     if(e.type==="giant"){
-      e.mesh.position.y = -1.15+Math.sin(visual*0.8+e.phase)*0.12;
+      const speed = stage5 ? 1.25 : 0.9;
+      const leash = stage5 ? 1.0 : 0.7;
+      const dx = player.position.x - e.x;
+      const dz = player.position.z - e.z;
+      const dist = Math.hypot(dx, dz);
+      let tx = e.homeX, tz = e.homeZ;
+      if(dist < 5.5){
+        tx = player.position.x;
+        tz = player.position.z;
+      }
+      const mx = tx - e.x, mz = tz - e.z;
+      const ml = Math.hypot(mx, mz);
+      if(ml > 0.001){
+        const step = Math.min(ml, speed*dt);
+        e.x += mx/ml*step;
+        e.z += mz/ml*step;
+      }
+      const ox = e.x - e.homeX, oz = e.z - e.homeZ;
+      const ol = Math.hypot(ox, oz);
+      if(ol > leash){
+        e.x = e.homeX + ox/ol*leash;
+        e.z = e.homeZ + oz/ol*leash;
+      }
+      e.heave = (e.heave||0) + dt;
+      const cycle = stage5 ? 2.6 : 3.2;
+      const sinkT = stage5 ? 0.35 : 0.4;
+      const riseT = stage5 ? 0.45 : 0.5;
+      const holdT = stage5 ? 0.3 : 0.35;
+      const settleT = stage5 ? 0.35 : 0.4;
+      const liftH = stage5 ? 2.6 : 2.2;
+      const ht = e.heave % cycle;
+      let lift = 0;
+      e.hitR = e.r;
+      if(ht < sinkT){
+        lift = -0.35*(ht/sinkT);
+      }else if(ht < sinkT+riseT){
+        const u = (ht-sinkT)/riseT;
+        lift = -0.35 + (liftH+0.35)*u;
+      }else if(ht < sinkT+riseT+holdT){
+        lift = liftH;
+        e.hitR = e.r + 0.55;
+      }else if(ht < sinkT+riseT+holdT+settleT){
+        const u = (ht-(sinkT+riseT+holdT))/settleT;
+        lift = liftH*(1-u);
+      }
+      e.mesh.position.set(e.x, -1.15+Math.sin(visual*0.8+e.phase)*0.12+lift, e.z);
       e.mesh.userData.tentacles.forEach((t,i)=>{
         t.rotation.z = Math.sin(visual*1.3+i)*0.18;
         t.rotation.x = Math.cos(visual*1.1+i*0.7)*0.12;
@@ -3283,19 +3402,159 @@ function updateEnemies(){
     }
     const top = e.platform.top;
     if(e.type==="jelly"){
-      e.mesh.position.y = 0.2+Math.sin(visual*1.8+e.phase)*0.18;
+      const amp = stage5 ? 0.85 : 0.62;
+      const spin = stage5 ? 1.45 : 1.25;
+      e.mesh.position.x = e.ox + Math.sin(visual*spin+e.phase)*amp;
+      e.mesh.position.y = 0.2+Math.sin(visual*2.2+e.phase)*0.24;
+      e.mesh.position.z = e.oz;
       e.mesh.rotation.y = Math.sin(visual+e.phase)*0.2;
     }else if(e.type==="octo"){
-      e.mesh.position.y = Math.abs(Math.sin(visual*2+e.phase))*0.08;
+      const leash = 1.6;
+      const speed = 1.6;
+      if(e.jumpCd>0) e.jumpCd -= dt;
+      if(e.mode==="home"){
+        let tx = e.ox, tz = e.oz;
+        if(currentPlatform===e.platform){
+          const relX = player.position.x - e.platform.x;
+          const relZ = player.position.z - e.platform.z;
+          const gap = Math.hypot(relX-e.mesh.position.x, relZ-e.mesh.position.z);
+          if(gap < 3.2){
+            tx = relX;
+            tz = relZ;
+          }
+        }
+        const mx = tx - e.mesh.position.x, mz = tz - e.mesh.position.z;
+        const ml = Math.hypot(mx, mz);
+        if(ml > 0.001){
+          const step = Math.min(ml, speed*dt);
+          e.mesh.position.x += mx/ml*step;
+          e.mesh.position.z += mz/ml*step;
+        }
+        const ox = e.mesh.position.x - e.ox, oz = e.mesh.position.z - e.oz;
+        const ol = Math.hypot(ox, oz);
+        if(ol > leash){
+          e.mesh.position.x = e.ox + ox/ol*leash;
+          e.mesh.position.z = e.oz + oz/ol*leash;
+        }
+        e.mesh.position.y = Math.abs(Math.sin(visual*2+e.phase))*0.08;
+        const pad = octoHigherPad(e);
+        const playerOnPad = pad && currentPlatform===pad;
+        const relX = player.position.x - e.platform.x;
+        const relZ = player.position.z - e.platform.z;
+        const near = currentPlatform===e.platform && Math.hypot(relX-e.mesh.position.x, relZ-e.mesh.position.z)<3.2;
+        if(pad && e.jumpCd<=0 && (near || playerOnPad)){
+          e.mode = "jump";
+          e.timer = 0;
+          e.pad = pad;
+          e.fromX = e.mesh.position.x;
+          e.fromZ = e.mesh.position.z;
+          e.fromY = e.mesh.position.y;
+          e.toX = pad.x - e.platform.x;
+          e.toZ = pad.z - e.platform.z;
+          e.toY = (pad.top||pad.y) - (e.platform.top||e.platform.y) + 0.15;
+        }
+      }else if(e.mode==="jump" || e.mode==="return"){
+        e.timer += dt;
+        const u = Math.min(1, e.timer/0.45);
+        const fromX = e.mode==="jump" ? e.fromX : e.toX;
+        const fromZ = e.mode==="jump" ? e.fromZ : e.toZ;
+        const fromY = e.mode==="jump" ? e.fromY : e.toY;
+        const toX = e.mode==="jump" ? e.toX : e.ox;
+        const toZ = e.mode==="jump" ? e.toZ : e.oz;
+        const toY = e.mode==="jump" ? e.toY : 0.08;
+        e.mesh.position.x = fromX + (toX-fromX)*u;
+        e.mesh.position.z = fromZ + (toZ-fromZ)*u;
+        e.mesh.position.y = fromY + (toY-fromY)*u + Math.sin(u*Math.PI)*0.8;
+        if(u>=1){
+          if(e.mode==="jump"){
+            e.mode = "perch";
+            e.timer = 0;
+            e.mesh.position.set(e.toX, e.toY, e.toZ);
+          }else{
+            e.mode = "home";
+            e.timer = 0;
+            e.jumpCd = 2;
+            e.mesh.position.set(e.ox, 0.08, e.oz);
+          }
+        }
+      }else{
+        e.timer += dt;
+        e.mesh.position.set(e.toX, e.toY+Math.abs(Math.sin(visual*2+e.phase))*0.08, e.toZ);
+        if(e.timer>=1.6){
+          e.mode = "return";
+          e.timer = 0;
+        }
+      }
     }else if(e.type==="shark"){
-      e.mesh.position.x = e.ox + Math.sin(visual*1.3+e.phase)*0.35;
-      e.mesh.position.y = 0.05+Math.sin(visual*2)*0.05;
+      const idle = stage5 ? 0.85 : 1.1;
+      const telegraph = stage5 ? 0.35 : 0.45;
+      const leapTime = stage5 ? 0.42 : 0.55;
+      const leapSpeed = stage5 ? 7.6 : 6.5;
+      const leapHeight = stage5 ? 1.55 : 1.35;
+      const recover = stage5 ? 0.55 : 0.7;
       const tail = e.mesh.getObjectByName("tail");
       if(tail) tail.rotation.y = Math.sin(visual*6)*0.4;
       const splash = e.mesh.getObjectByName("splash");
       if(splash) splash.scale.setScalar(1+Math.sin(visual*4+e.phase)*0.08);
+      const halfW = e.platform.w*0.5 - 0.2;
+      const halfD = e.platform.d*0.5 - 0.2;
+      if(e.mode==="idle"){
+        e.mesh.position.x = e.ox + Math.sin(visual*1.3+e.phase)*0.35;
+        e.mesh.position.z = e.oz;
+        e.mesh.position.y = 0.05+Math.sin(visual*2)*0.05;
+        e.timer += dt;
+        if(e.timer>=idle){
+          e.mode = "telegraph";
+          e.timer = 0;
+        }
+      }else if(e.mode==="telegraph"){
+        e.mesh.position.x = e.ox;
+        e.mesh.position.z = e.oz;
+        e.mesh.position.y = -0.22;
+        e.timer += dt;
+        if(e.timer>=telegraph){
+          const relX = player.position.x - e.platform.x - e.ox;
+          const relZ = player.position.z - e.platform.z - e.oz;
+          const len = Math.hypot(relX, relZ) || 1;
+          const reach = Math.min(e.platform.w*0.7, leapSpeed*leapTime);
+          let tx = e.ox + relX/len*reach;
+          let tz = e.oz + relZ/len*reach;
+          tx = Math.max(-halfW, Math.min(halfW, tx));
+          tz = Math.max(-halfD, Math.min(halfD, tz));
+          e.leapX0 = e.ox;
+          e.leapZ0 = e.oz;
+          e.leapX1 = tx;
+          e.leapZ1 = tz;
+          e.mode = "leap";
+          e.timer = 0;
+        }
+      }else if(e.mode==="leap"){
+        e.timer += dt;
+        const u = Math.min(1, e.timer/leapTime);
+        e.mesh.position.x = Math.max(-halfW, Math.min(halfW, e.leapX0 + (e.leapX1-e.leapX0)*u));
+        e.mesh.position.z = Math.max(-halfD, Math.min(halfD, e.leapZ0 + (e.leapZ1-e.leapZ0)*u));
+        e.mesh.position.y = Math.sin(u*Math.PI)*leapHeight;
+        if(u>=1){
+          e.mode = "recover";
+          e.timer = 0;
+          e.backX = e.mesh.position.x;
+          e.backZ = e.mesh.position.z;
+          e.backY = e.mesh.position.y;
+        }
+      }else{
+        e.timer += dt;
+        const u = Math.min(1, e.timer/recover);
+        e.mesh.position.x = e.backX + (e.ox-e.backX)*u;
+        e.mesh.position.z = e.backZ + (e.oz-e.backZ)*u;
+        e.mesh.position.y = (e.backY||0)*(1-u) + 0.05*u;
+        if(e.timer>=recover){
+          e.mode = "idle";
+          e.timer = 0;
+          e.mesh.position.set(e.ox, 0.05, e.oz);
+        }
+      }
     }else if(e.type==="star"){
-      e.mesh.position.x = Math.sin(visual*1.1+e.phase)*e.range;
+      e.mesh.position.x = e.ox + Math.sin(visual*1.1+e.phase)*e.range;
       e.mesh.rotation.y = visual*0.8;
     }
     e.mesh.position.y += 0;
@@ -3309,7 +3568,7 @@ function collideEnemies(){
   for(const e of enemies){
     if(e.type==="giant"){
       const d = Math.hypot(px-e.x, pz-e.z);
-      if(d<e.r && py<4.15 && py>-0.2){ damage(e.dmg); return; }
+      if(d<(e.hitR||e.r) && py<4.15 && py>-0.2){ damage(e.dmg); return; }
       continue;
     }
     e.mesh.getWorldPosition(tmp);
@@ -3317,8 +3576,15 @@ function collideEnemies(){
     if(d>e.r) continue;
     const top = e.platform.top;
     if(e.type==="jelly" && py>top+1.65) continue;
-    if(e.type==="octo" && py>top+1.12) continue;
-    if(e.type==="shark" && (py>top+1.25 || py<top-0.3)) continue;
+    if(e.type==="octo"){
+      if(e.mode==="jump" || e.mode==="return") continue;
+      if(py>tmp.y+1.05) continue;
+    }
+    if(e.type==="shark"){
+      if(e.mode==="leap"){
+        if(py>tmp.y+0.85 || py<top-0.3) continue;
+      }else if(py>top+1.25 || py<top-0.3) continue;
+    }
     if(e.type==="star" && py>top+0.85) continue;
     damage(e.dmg);
     return;
@@ -3647,7 +3913,7 @@ function frame(){
     return;
   }
 
-  updateEnemies();
+  updateEnemies(dt);
   if(state==="play" || state==="revive") updatePlatforms(dt);
 
   const input = readInput();
