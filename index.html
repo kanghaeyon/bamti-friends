@@ -2259,6 +2259,17 @@ function loadRanks(){
 function writeRanks(data){
   try{ localStorage.setItem(RANK_KEY, JSON.stringify(data)); }catch(e){}
 }
+const RANK_SEASON = 2;
+function resetPastLocalRanks(){
+  if(save.rankSeason === RANK_SEASON) return;
+  save.best = {};
+  save.bestScore = {};
+  save.bestTime = {};
+  save.rankSeason = RANK_SEASON;
+  writeSave();
+  writeRanks(emptyRanks());
+}
+resetPastLocalRanks();
 function betterRank(a, b){
   return (b.score - a.score) || (a.time - b.time);
 }
@@ -2273,6 +2284,7 @@ function upsertRank(list, entry){
   if(list.length>100) list.length = 100;
 }
 function submitLocalRanking(payload){
+  if(!payload.stages || payload.stages.some(rec => !rec || rec.season !== RANK_SEASON)) return loadRanks();
   const data = loadRanks();
   upsertRank(data.overall, {name:payload.name, score:payload.total, grade:payload.grade, time:payload.totalTime});
   payload.stages.forEach((rec, i)=>{
@@ -2563,6 +2575,7 @@ function submitStageOnline(
   stageNumber,
   rec
 ){
+  if(!rec || rec.season !== RANK_SEASON) return Promise.resolve(false);
   return insertLeaderboardRow(
     name,
     stageNumber,
@@ -2574,6 +2587,7 @@ async function submitOverallOnline(
   name,
   stages
 ){
+  if(!stages || stages.some(rec => !rec || rec.season !== RANK_SEASON)) return false;
   for(let i = 0; i < stages.length; i++){
     await insertLeaderboardRow(
       name,
@@ -2976,6 +2990,7 @@ function revive(){
 }
 
 function remember(stageNumber, rec){
+  rec.season = RANK_SEASON;
   const key = String(stageNumber);
   const scoreBest = save.bestScore[key];
   if(!scoreBest || rec.score > scoreBest.score || (rec.score===scoreBest.score && rec.time < scoreBest.time)){
@@ -3046,10 +3061,13 @@ function setOverlay(id, open){
   el.hidden = !open;
   el.style.display = open ? "flex" : "none";
 }
+function rankedRec(rec){
+  return rec && rec.season === RANK_SEASON ? rec : null;
+}
 function recordsForFinale(){
   const rows = [];
   for(let n=1;n<=5;n++){
-    rows.push(runLog[n] || save.bestScore[n] || save.bestScore[String(n)] || null);
+    rows.push(rankedRec(runLog[n]) || rankedRec(save.bestScore[n]) || rankedRec(save.bestScore[String(n)]) || null);
   }
   return rows;
 }
