@@ -1,3 +1,398 @@
+
+저걸 어디다 붙혀 쓸수있게 코드로보내 게임바로켜지니까못써
+응. 파일 누르지 말고 Cursor 코드창에서 직접 붙여넣으면 돼.
+
+Cursor에서 기존 index.html 열고, 검색으로 const RANK_API 찾아.
+거기서부터 let runLog = {}; 바로 전까지 전부 지우고, 아래 코드로 바꿔.
+
+const RANK_API = "https://nlsusagaywlyurolsdxh.supabase.co";
+const RANK_PUBLISHABLE = "sb_publishable_hH15zZgGLBp4psQiPY3F8Q_Vs97jgnN";
+
+let onlineRanks = null;
+let onlineState = "off";
+let rankTab = "overall";
+let rankBoardOpen = false;
+
+function rankHeaders(){
+  return {
+    apikey: RANK_PUBLISHABLE,
+    Authorization: "Bearer " + RANK_PUBLISHABLE,
+    "Content-Type": "application/json"
+  };
+}
+
+function mapLeaderboardRow(e){
+  const stage = Number(e.stage);
+  const score = Number(e.score || 0);
+  const time = Number(e.clear_time || 0);
+
+  return {
+    name: String(e.nickname || "").trim(),
+    stage,
+    score,
+    time,
+    stars: 0,
+    grade:
+      stage >= 1 && stage <= 5
+        ? gradeOf(stage - 1, score)
+        : "-"
+  };
+}
+
+async function fetchLeaderboardRows(){
+  const url =
+    RANK_API +
+    "/rest/v1/leaderboard" +
+    "?select=nickname,score,stage,clear_time" +
+    "&order=score.desc,clear_time.asc" +
+    "&limit=500";
+
+  const res = await fetch(url, {
+    headers: rankHeaders()
+  });
+
+  if(!res.ok){
+    throw new Error("leaderboard_read_failed");
+  }
+
+  const data = await res.json();
+
+  return data
+    .map(mapLeaderboardRow)
+    .filter(row =>
+      row.name &&
+      Number.isFinite(row.score) &&
+      Number.isFinite(row.time)
+    );
+}
+
+function betterOnlineRank(a,b){
+  return (b.score - a.score) || (a.time - b.time);
+}
+
+function bestRowsByPlayer(rows){
+  const players = new Map();
+
+  for(const row of rows){
+    const old = players.get(row.name);
+
+    if(
+      !old ||
+      row.score > old.score ||
+      (row.score === old.score && row.time < old.time)
+    ){
+      players.set(row.name, row);
+    }
+  }
+
+  return Array.from(players.values()).sort(betterOnlineRank);
+}
+
+async function loadOnlineRanks(){
+  const rows = await fetchLeaderboardRows();
+
+  const stages = {
+    1: [],
+    2: [],
+    3: [],
+    4: [],
+    5: []
+  };
+
+  for(let stage = 1; stage <= 5; stage++){
+    stages[stage] = bestRowsByPlayer(
+      rows.filter(row => row.stage === stage)
+    );
+  }
+
+  const playerTotals = new Map();
+
+  for(const row of rows){
+    if(row.stage < 1 || row.stage > 5) continue;
+
+    if(!playerTotals.has(row.name)){
+      playerTotals.set(row.name,{
+        name: row.name,
+        stages: {}
+      });
+    }
+
+    const player = playerTotals.get(row.name);
+    const old = player.stages[row.stage];
+
+    if(
+      !old ||
+      row.score > old.score ||
+      (row.score === old.score && row.time < old.time)
+    ){
+      player.stages[row.stage] = row;
+    }
+  }
+
+  const overall = [];
+
+  for(const player of playerTotals.values()){
+    const records = [];
+
+    for(let stage = 1; stage <= 5; stage++){
+      if(player.stages[stage]){
+        records.push(player.stages[stage]);
+      }
+    }
+
+    if(records.length === 0) continue;
+
+    const totalScore = records.reduce(
+      (sum,row) => sum + row.score,
+      0
+    );
+
+    const totalTime = records.reduce(
+      (sum,row) => sum + row.time,
+      0
+    );
+
+    overall.push({
+      name: player.name,
+      score: totalScore,
+      time: totalTime,
+      stars: 0,
+      grade:
+        records.length === 5
+          ? finalGrade(totalScore)
+          : "-"
+    });
+  }
+
+  overall.sort(betterOnlineRank);
+
+  return {
+    overall,
+    stages
+  };
+}
+
+function currentRanks(){
+  if(onlineState === "ok" && onlineRanks){
+    return onlineRanks;
+  }
+
+  return loadRanks();
+}
+
+function setRankNotes(){
+  const finale =
+    document.getElementById("finaleRankNote");
+
+  const board =
+    document.getElementById("rankBoardNote");
+
+  if(onlineState === "ok"){
+    if(finale){
+      finale.textContent =
+        "온라인 랭킹 기록입니다.";
+    }
+
+    if(board){
+      board.textContent =
+        "모든 플레이어의 기록입니다.";
+    }
+  }else{
+    if(finale){
+      finale.textContent =
+        "온라인 랭킹에 연결되지 않았습니다.";
+    }
+
+    if(board){
+      board.textContent =
+        "온라인 랭킹에 연결되지 않았습니다.";
+    }
+  }
+}
+
+async function insertLeaderboardRow(
+  name,
+  stageNumber,
+  rec
+){
+  const body = {
+    nickname: name,
+    score: Number(rec.score) || 0,
+    stage: Number(stageNumber),
+    clear_time: Number(rec.time) || 0
+  };
+
+  const res = await fetch(
+    RANK_API + "/rest/v1/leaderboard",
+    {
+      method: "POST",
+
+      headers: {
+        ...rankHeaders(),
+        Prefer: "return=minimal"
+      },
+
+      body: JSON.stringify(body)
+    }
+  );
+
+  if(!res.ok){
+    throw new Error("leaderboard_write_failed");
+  }
+
+  return true;
+}
+
+function submitStageOnline(
+  name,
+  stageNumber,
+  rec
+){
+  return insertLeaderboardRow(
+    name,
+    stageNumber,
+    rec
+  );
+}
+
+async function submitOverallOnline(
+  name,
+  stages
+){
+  for(let i = 0; i < stages.length; i++){
+    await insertLeaderboardRow(
+      name,
+      i + 1,
+      stages[i]
+    );
+  }
+
+  return true;
+}
+
+async function refreshOnlineRanks(){
+  try{
+    onlineRanks =
+      await loadOnlineRanks();
+
+    onlineState = "ok";
+  }catch(error){
+    console.error(
+      "온라인 랭킹 불러오기 실패",
+      error
+    );
+
+    onlineState = "off";
+
+    setRankNotes();
+    renderTop3();
+
+    if(rankBoardOpen){
+      paintRank(rankTab);
+    }
+
+    return;
+  }
+
+  setRankNotes();
+  renderTop3();
+
+  if(rankBoardOpen){
+    paintRank(rankTab);
+  }
+}
+그 아래에 원래 있던 let runLog = {};부터는 절대 지우지 마.
+
+즉 이렇게 돼야 해:
+
+// 위에 내가 준 랭킹 코드
+
+async function refreshOnlineRanks(){
+  ...
+}
+
+let runLog = {};
+
+// 여기부터 원래 밤티친구들 코드 그대로
+function placePlayer(x,y,z){
+이 코드는 기존 leaderboard에 있는 사람 기록을 읽고, 게임 기록을 leaderboard에 저장하도록 만든 부분이야. 맵·캐릭터·조작 코드는 안 바꾼다.
+
+다만 Supabase가 leaderboard 읽기/쓰기를 허용하고 있는지는 아직 확인 안 됐어. 그건 붙여넣고 실행했을 때 확인할 수 있어.
+
+했어죽웄어
+붙였는데 게임이 안 켜지는 거면, 지금 상태에서 내가 원인을 찍어서 말하면 또 추측이야.
+
+지금 수정한 index.html 그대로 올려줘.
+내가 그 파일에서 오류 난 부분만 찾아서 다른 건 안 건드리고 랭킹 코드만 고친 전체 코드로 바로 돌려줄게.
+
+
+붙여넣은 텍스트(1)(7).txt
+문서
+
+찾았어. 네가 붙여넣으면서 원래 있던 이 한 줄이 빠졌어.
+
+let runLog = {};
+그래서 게임 코드 안에서는 runLog를 계속 쓰는데 선언이 없어서 깨진 거야.
+
+Cursor에서 function placePlayer(x,y,z){ 바로 위에 이 한 줄만 넣어.
+
+let runLog = {};
+
+function placePlayer(x,y,z){
+
+이건 내가 네가 올린 현재 파일을 직접 확인해서 찾은 거야. 다른 랭킹 코드는 그대로 둬도 돼.
+
+수정된 전체 파일도 만들어뒀어: 
+
+
+밤티친구들_랭킹수정_복구.html
+HTML
+게임이 열리니까 코드로 전체보내
+
+전체 코드를 텍스트로 바로 보이게 출력했고, 복붙용 .txt도 같이 만들었어. HTML처럼 게임이 열리는 파일이 아니라 코드가 보이는 텍스트 파일이야.
+
+Cursor에서 기존 index.html 전체 선택 → 전부 지우기 → 이 TXT 안의 코드 전체 복사해서 붙여넣으면 돼. 
+ 
+
+
+밤티친구들_전체코드_복붙용.txt
+문서
+바꿧어 어떻게 실행해
+Cursor에서 실행하면 돼.
+
+가장 확실한 건 지금 바꾼 index.html을 저장한 다음 브라우저에서 여는 것이야.
+
+Cursor에서 Ctrl + S로 저장
+왼쪽 파일 목록에서 index.html 우클릭
+Reveal in File Explorer / 파일 탐색기에서 표시
+열린 폴더에서 index.html 더블클릭
+그러면 브라우저에서 게임이 열려.
+
+만약 더블클릭했는데 흰 화면이거나 아무것도 안 뜨면, 그 화면이나 Cursor 오류 표시를 캡처해서 보내줘. 그때는 추측 안 하고 실제 오류만 볼게.
+
+게임은 되거든 ? 랭킹 올라가는지 확인해봐야해?
+응. 이제 확인할 건 딱 그거야.
+
+게임은 켜졌으니까 다음은 실제 온라인 랭킹 저장 테스트야.
+
+게임 한 판 해서 기록 만든 다음 랭킹 등록 눌러. 그다음 타이틀로 돌아가서 오른쪽 TOP 3에 네 닉네임/점수가 뜨는지 확인해.
+
+근데 이것만으로는 완전한 온라인 확인은 아니야. 같은 브라우저에는 로컬 기록도 있으니까, 진짜 온라인인지 확실히 보려면 시크릿 창이나 다른 브라우저에서 게임을 다시 열어서 같은 기록이 뜨는지 확인해야 해.
+
+다른 창에서도 뜸 → 온라인 랭킹 읽기 성공
+랭킹 등록 후 다른 창에서도 뜸 → 온라인 저장까지 성공
+현재 브라우저에서만 뜸 → 로컬 기록일 가능성 있음
+“온라인 랭킹에 올리지 못했어” 뜸 → Supabase 쓰기 권한 쪽이 아직 안 된 것
+지금은 실제 등록 테스트 전이라 온라인 저장 성공 여부는 아직 확인 안 된 상태야.
+
+일단 다깨봐야아는거네>
+응. 현재 구조에선 최종 랭킹 등록 버튼이 5스테이지를 다 깬 뒤에 나오니까, 온라인 저장까지 제대로 되는지 보려면 일단 끝까지 한 번 깨봐야 해.
+
+다만 스테이지별 기록 저장은 각 스테이지 클리어할 때마다 이미 시도하도록 코드가 들어가 있어. 그래서 중간에 1스테이지만 깨도 Supabase에 저장이 되는지는 확인할 수 있어.
+
+가장 빠른 확인은 1스테이지만 깨고 타이틀로 돌아가서 랭킹 보기 → 1번 탭에 네 기록이 뜨는지 보는 것이야.
+최종 전체랭킹 등록까지 확인하려면 그때는 5스테이지 전부 깨야 해.
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -297,7 +692,7 @@
       <div class="totalBox"><span>FINAL GRADE</span><b id="finaleGrade">C</b></div>
     </div>
     <div class="actions" id="finaleActions"></div>
-    <p class="note">랭킹은 이 브라우저에 저장돼. 온라인 랭킹은 아직 연결되지 않았어.</p>
+    <p class="note" id="finaleRankNote">온라인 랭킹을 확인하고 있어.</p>
   </div>
 </div>
 
@@ -305,7 +700,7 @@
   <div class="panel wide">
     <h1>랭킹</h1>
     <div class="rankHead">
-      <p class="note">이 브라우저에만 저장돼. 다른 사람과 순위를 공유하려면 서버와 데이터베이스가 필요해. 지금은 온라인 랭킹이 연결되지 않았어.</p>
+      <p class="note" id="rankBoardNote">온라인 랭킹을 확인하고 있어.</p>
       <div class="myBest"><span>내 최고 기록</span><b id="myBestScore">-</b><span id="myBestGrade"></span></div>
     </div>
     <div class="actions" id="rankTabs"></div>
@@ -1869,6 +2264,303 @@ function submitLocalRanking(payload){
   writeRanks(data);
   return data;
 }
+const RANK_API = "https://nlsusagaywlyurolsdxh.supabase.co";
+const RANK_PUBLISHABLE = "sb_publishable_hH15zZgGLBp4psQiPY3F8Q_Vs97jgnN";
+
+let onlineRanks = null;
+let onlineState = "off";
+let rankTab = "overall";
+let rankBoardOpen = false;
+
+function rankHeaders(){
+  return {
+    apikey: RANK_PUBLISHABLE,
+    Authorization: "Bearer " + RANK_PUBLISHABLE,
+    "Content-Type": "application/json"
+  };
+}
+
+function mapLeaderboardRow(e){
+  const stage = Number(e.stage);
+  const score = Number(e.score || 0);
+  const time = Number(e.clear_time || 0);
+
+  return {
+    name: String(e.nickname || "").trim(),
+    stage,
+    score,
+    time,
+    stars: 0,
+    grade:
+      stage >= 1 && stage <= 5
+        ? gradeOf(stage - 1, score)
+        : "-"
+  };
+}
+
+async function fetchLeaderboardRows(){
+  const url =
+    RANK_API +
+    "/rest/v1/leaderboard" +
+    "?select=nickname,score,stage,clear_time" +
+    "&order=score.desc,clear_time.asc" +
+    "&limit=500";
+
+  const res = await fetch(url, {
+    headers: rankHeaders()
+  });
+
+  if(!res.ok){
+    throw new Error("leaderboard_read_failed");
+  }
+
+  const data = await res.json();
+
+  return data
+    .map(mapLeaderboardRow)
+    .filter(row =>
+      row.name &&
+      Number.isFinite(row.score) &&
+      Number.isFinite(row.time)
+    );
+}
+
+function betterOnlineRank(a,b){
+  return (b.score - a.score) || (a.time - b.time);
+}
+
+function bestRowsByPlayer(rows){
+  const players = new Map();
+
+  for(const row of rows){
+    const old = players.get(row.name);
+
+    if(
+      !old ||
+      row.score > old.score ||
+      (row.score === old.score && row.time < old.time)
+    ){
+      players.set(row.name, row);
+    }
+  }
+
+  return Array.from(players.values()).sort(betterOnlineRank);
+}
+
+async function loadOnlineRanks(){
+  const rows = await fetchLeaderboardRows();
+
+  const stages = {
+    1: [],
+    2: [],
+    3: [],
+    4: [],
+    5: []
+  };
+
+  for(let stage = 1; stage <= 5; stage++){
+    stages[stage] = bestRowsByPlayer(
+      rows.filter(row => row.stage === stage)
+    );
+  }
+
+  const playerTotals = new Map();
+
+  for(const row of rows){
+    if(row.stage < 1 || row.stage > 5) continue;
+
+    if(!playerTotals.has(row.name)){
+      playerTotals.set(row.name,{
+        name: row.name,
+        stages: {}
+      });
+    }
+
+    const player = playerTotals.get(row.name);
+    const old = player.stages[row.stage];
+
+    if(
+      !old ||
+      row.score > old.score ||
+      (row.score === old.score && row.time < old.time)
+    ){
+      player.stages[row.stage] = row;
+    }
+  }
+
+  const overall = [];
+
+  for(const player of playerTotals.values()){
+    const records = [];
+
+    for(let stage = 1; stage <= 5; stage++){
+      if(player.stages[stage]){
+        records.push(player.stages[stage]);
+      }
+    }
+
+    if(records.length === 0) continue;
+
+    const totalScore = records.reduce(
+      (sum,row) => sum + row.score,
+      0
+    );
+
+    const totalTime = records.reduce(
+      (sum,row) => sum + row.time,
+      0
+    );
+
+    overall.push({
+      name: player.name,
+      score: totalScore,
+      time: totalTime,
+      stars: 0,
+      grade:
+        records.length === 5
+          ? finalGrade(totalScore)
+          : "-"
+    });
+  }
+
+  overall.sort(betterOnlineRank);
+
+  return {
+    overall,
+    stages
+  };
+}
+
+function currentRanks(){
+  if(onlineState === "ok" && onlineRanks){
+    return onlineRanks;
+  }
+
+  return loadRanks();
+}
+
+function setRankNotes(){
+  const finale =
+    document.getElementById("finaleRankNote");
+
+  const board =
+    document.getElementById("rankBoardNote");
+
+  if(onlineState === "ok"){
+    if(finale){
+      finale.textContent =
+        "온라인 랭킹 기록입니다.";
+    }
+
+    if(board){
+      board.textContent =
+        "모든 플레이어의 기록입니다.";
+    }
+  }else{
+    if(finale){
+      finale.textContent =
+        "온라인 랭킹에 연결되지 않았습니다.";
+    }
+
+    if(board){
+      board.textContent =
+        "온라인 랭킹에 연결되지 않았습니다.";
+    }
+  }
+}
+
+async function insertLeaderboardRow(
+  name,
+  stageNumber,
+  rec
+){
+  const body = {
+    nickname: name,
+    score: Number(rec.score) || 0,
+    stage: Number(stageNumber),
+    clear_time: Number(rec.time) || 0
+  };
+
+  const res = await fetch(
+    RANK_API + "/rest/v1/leaderboard",
+    {
+      method: "POST",
+
+      headers: {
+        ...rankHeaders(),
+        Prefer: "return=minimal"
+      },
+
+      body: JSON.stringify(body)
+    }
+  );
+
+  if(!res.ok){
+    throw new Error("leaderboard_write_failed");
+  }
+
+  return true;
+}
+
+function submitStageOnline(
+  name,
+  stageNumber,
+  rec
+){
+  return insertLeaderboardRow(
+    name,
+    stageNumber,
+    rec
+  );
+}
+
+async function submitOverallOnline(
+  name,
+  stages
+){
+  for(let i = 0; i < stages.length; i++){
+    await insertLeaderboardRow(
+      name,
+      i + 1,
+      stages[i]
+    );
+  }
+
+  return true;
+}
+
+async function refreshOnlineRanks(){
+  try{
+    onlineRanks =
+      await loadOnlineRanks();
+
+    onlineState = "ok";
+  }catch(error){
+    console.error(
+      "온라인 랭킹 불러오기 실패",
+      error
+    );
+
+    onlineState = "off";
+
+    setRankNotes();
+    renderTop3();
+
+    if(rankBoardOpen){
+      paintRank(rankTab);
+    }
+
+    return;
+  }
+
+  setRankNotes();
+  renderTop3();
+
+  if(rankBoardOpen){
+    paintRank(rankTab);
+  }
+}
+
 let runLog = {};
 
 function placePlayer(x,y,z){
@@ -2251,6 +2943,9 @@ function finishStage(){
   remember(stageIndex+1, rec);
   save.unlocked = Math.max(save.unlocked, Math.min(5, stageIndex+2));
   writeSave();
+  if(validNick(save.nickname).ok){
+    submitStageOnline(save.nickname, stageIndex+1, rec).then(()=>refreshOnlineRanks()).catch(()=>{});
+  }
   const done = stageIndex+1;
   let sum = 0;
   for(let n=1;n<=done;n++) sum += (runLog[n] && runLog[n].score) || 0;
@@ -2341,8 +3036,12 @@ function showFinale(){
     save.nickname = typed.name;
     writeSave();
     submitLocalRanking({name:save.nickname, total, totalTime, grade, stages:rows});
-    showToast("이 기기에 랭킹을 저장했어.");
-    renderTop3();
+    submitOverallOnline(save.nickname, rows).then(()=>refreshOnlineRanks()).then(()=>{
+      showToast("온라인 랭킹에 등록했어.");
+    }).catch(err=>{
+      if(err && err.message==="name_taken") showToast("이 닉네임은 다른 플레이어가 이미 온라인 랭킹에 등록했어.");
+      else showToast("이 기기에는 저장했지만, 온라인 랭킹에는 올리지 못했어.");
+    });
   });
   add("랭킹 보기", false, ()=>openRank("overall"));
   add("타이틀로", false, titleScreen);
@@ -2354,7 +3053,7 @@ function renderTop3(){
   const list = document.getElementById("topRankList");
   const panel = document.getElementById("topRank");
   if(!list || !panel) return;
-  const rows = (loadRanks().overall || []).slice(0, 3);
+  const rows = (currentRanks().overall || []).slice(0, 3);
   const labels = ["1등", "2등", "3등"];
   if(!rows.length){
     list.innerHTML = '<li class="empty">아직 기록 없음</li>';
@@ -2363,9 +3062,9 @@ function renderTop3(){
   const medals = ["🥇", "🥈", "🥉"];
   list.innerHTML = rows.map((e,i)=>`<li class="rank${i+1}"><b>${medals[i]} ${labels[i]}</b><span>${e.name}</span><em>${Number(e.score).toLocaleString("ko-KR")}</em></li>`).join("");
 }
-function openRank(tab){
-  document.getElementById("menu").style.visibility = "hidden";
-  const data = loadRanks();
+function paintRank(tab){
+  rankTab = tab || "overall";
+  const data = currentRanks();
   const tabs = document.getElementById("rankTabs");
   tabs.innerHTML = "";
   const names = [["overall","전체"],["1","1"],["2","2"],["3","3"],["4","4"],["5","5"]];
@@ -2377,10 +3076,10 @@ function openRank(tab){
     b.onclick = ()=>openRank(id);
     tabs.appendChild(b);
   }
-  const mine = data.overall.find(e=>e.name===save.nickname);
+  const mine = (data.overall||[]).find(e=>e.name===save.nickname);
   document.getElementById("myBestScore").textContent = mine ? mine.score.toLocaleString("ko-KR") : "-";
   document.getElementById("myBestGrade").textContent = mine ? mine.grade : "아직 전체 기록이 없어";
-  const list = tab==="overall" ? data.overall : (data.stages[tab]||[]);
+  const list = rankTab==="overall" ? (data.overall||[]) : (data.stages[rankTab]||[]);
   const box = document.getElementById("rankList");
   box.innerHTML = list.length ? "" : "<div class=\"empty\">아직 등록된 기록이 없어요!</div>";
   const medals = ["🥇","🥈","🥉"];
@@ -2390,7 +3089,15 @@ function openRank(tab){
     row.innerHTML = `${mark}<span>${e.name}</span><span>${e.score.toLocaleString("ko-KR")} · ${e.grade}</span><span>${formatTime(e.time)}</span>`;
     box.appendChild(row);
   });
+  setRankNotes();
+}
+function openRank(tab){
+  document.getElementById("menu").style.visibility = "hidden";
+  rankBoardOpen = true;
+  rankTab = tab || "overall";
+  paintRank(rankTab);
   setOverlay("rankBoard", true);
+  refreshOnlineRanks();
 }
 function titleScreen(){
   switchMusic("title");
@@ -2402,6 +3109,7 @@ function titleScreen(){
   setOverlay("guide", false);
   setOverlay("finale", false);
   setOverlay("rankBoard", false);
+  rankBoardOpen = false;
   setOverlay("nick", false);
   setOverlay("settings", false);
   showHome();
@@ -2410,6 +3118,7 @@ function titleScreen(){
   const top = document.getElementById("topRank");
   if(top) top.hidden = false;
   renderTop3();
+  refreshOnlineRanks();
   document.getElementById("mapHint").hidden = true;
   document.getElementById("nickLabel").textContent = save.nickname ? `플레이어 ${save.nickname}` : "";
   menuGroup.visible = true;
@@ -3060,6 +3769,7 @@ document.getElementById("guideClose").onclick = ()=>{
   document.getElementById("menu").style.visibility = "visible";
 };
 document.getElementById("rankClose").onclick = ()=>{
+  rankBoardOpen = false;
   setOverlay("rankBoard", false);
   if(state==="menu") document.getElementById("menu").style.visibility = "visible";
 };
@@ -3203,7 +3913,12 @@ else{
 }
 camera.position.set(0, 1.7, 8.2);
 camera.lookAt(0, 1.05, 0);
+refreshOnlineRanks();
 frame();
 </script>
 </body>
 </html>
+
+
+
+
